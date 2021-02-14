@@ -11,6 +11,7 @@ import tmp from "tmp";
 import { fetch } from "./fetch";
 import which from "which";
 import dotenv from "dotenv";
+import type { Writable } from "stream";
 
 const HOME =
   process.platform === "win32"
@@ -21,6 +22,48 @@ const GIT_PEEK_ENV_PATH = path.join(HOME, ".git-peek");
 let editorsToTry = ["code", "subl", "code-insiders", "vim", "vi"];
 
 let shouldKeep = false;
+
+let logFunction = console.log;
+let exceptionLogger = console.error;
+
+// fs.rmSync was added in Node v14.14
+// See docs: https://nodejs.org/api/fs.html#fs_fs_rmsync_path_options
+if (!fs.rmSync) {
+  const rimraf = require("rimraf");
+  fs.rmSync = (path: string, options: fs.RmOptions) => {
+    // Just in-case!
+    if (path === "/") return;
+    if (path === "/Applications") return;
+    return rimraf.sync(path);
+  };
+}
+
+async function fetchEditor(_editor, silent) {
+  let chosenEditor =
+    !_editor || _editor === "auto" ? process.env.EDITOR : _editor;
+
+  if (!chosenEditor?.trim().length) {
+    for (let editor of editorsToTry) {
+      try {
+        chosenEditor = await which(editor);
+        if (chosenEditor.includes("code") || chosenEditor.includes("subl")) {
+          chosenEditor = `"` + chosenEditor + `"`;
+        }
+        break;
+      } catch (exception) {}
+    }
+  }
+
+  if (!chosenEditor || !chosenEditor?.trim()?.length) {
+    if (!silent)
+      console.warn(
+        "No editor detected, defaulting to Visual Studio Code. Set an editor with the -e flag"
+      );
+    chosenEditor = "code";
+  }
+
+  return chosenEditor;
+}
 
 const DOTENV_EXISTS = fs.existsSync(GIT_PEEK_ENV_PATH);
 
@@ -110,7 +153,7 @@ function doExit() {
     tmpobj?.removeCallback();
     tmpobj = null;
     didRemove = false;
-    console.log("🗑  Deleted temp repo");
+    instance?.log("🗑  Deleted temp repo");
   }
 
   if (instance?.archive?.destroy) {
@@ -118,11 +161,17 @@ function doExit() {
   }
 
   if (instance?._tar) {
+    instance?._tar.abort("none");
     instance?._tar.removeAllListeners();
   }
 
   if (instance?.slowTask) {
+    if (!instance.slowTask.killed) {
+      instance.slowTask.kill("SIGKILL");
+    }
+
     instance.slowTask.removeAllListeners();
+
     instance.slowTask = null;
   }
 
@@ -132,16 +181,10 @@ function doExit() {
     instance?.destination?.length &&
     fs.existsSync(instance.destination)
   ) {
-    if (fs.rmSync) {
-      fs.rmSync(instance.destination, {
-        recursive: true,
-        force: true,
-      });
-    } else {
-      fs.rmdirSync(instance.destination, {
-        recursive: true,
-      });
-    }
+    fs.rmSync(instance.destination, {
+      recursive: true,
+      force: true,
+    });
   }
 }
 
@@ -233,7 +276,7 @@ If this is a private repo, consider setting $GITHUB_TOKEN. To save $GITHUB_TOKEN
     }
   }
   didUseFallback = false;
-  _tar: NodeJS.WritableStream;
+  _tar: Writable;
   unzipPromise: Promise<any>;
   unzip(owner, name, ref, fallback, to: string) {
     return new Promise((resolve2, reject2) => {
@@ -315,10 +358,13 @@ OPTIONS
                         By default, it will search $EDITOR. If not found, it
                         will try code, then subl, then vim.
 
-  -o, --out=           [default: system temp directory] output directory to
-                        store repository files in. If you're cloning a large
-                        repo and your tempdir is an in-memory storage (/tmp),
-                        maybe change this.
+  -d                    [default: false] Ask the GitHub API
+                        for the default_branch to clone.
+
+  -r, --register        [default: false] Register the git-peek:// url protocol
+                        This allows the "Open" buttons to work on
+                        github.com once you've installed the extension. Only
+                        supported on macOS (Windows coming soon).
 
   -w, --wait           [default: false] wait to open the editor until the
                         repository finishes downloading. always on for vi.
@@ -330,8 +376,10 @@ OPTIONS
                        you'll want to set this manually. but it will
                        try to infer from the input by default.
 
-  -d                   [default: false] Ask the GitHub API
-                       for the default_branch to clone.
+  -o, --out=           [default: system temp directory] output directory to
+                       store repository files in. If you're cloning a large
+                       repo and your tempdir is an in-memory storage (/tmp),
+                       maybe change this.
 
   -h, --help           show CLI help
 
@@ -349,6 +397,22 @@ access token. To persist it, store it in your shell or the .env shown above.
 `.trim(),
       {
         flags: {
+          fromscript: {
+            type: "boolean",
+            default: false,
+          },
+          register: {
+            type: "boolean",
+            default: false,
+            alias: "r",
+            description: "Register protocol handler",
+          },
+          confirm: {
+            type: "boolean",
+            default: false,
+            alias: "c",
+            description: "Confirm before deleting",
+          },
           out: {
             type: "string",
             default: "",
@@ -437,11 +501,11 @@ access token. To persist it, store it in your shell or the .env shown above.
       out: tempBaseDir,
       branch,
       defaultBranch,
+      register,
     } = cli.flags;
 
     shouldKeep = cli.flags.keep;
 
-    let url = cli.input[0]?.trim() ?? "";
     if (help) {
       cli.showHelp(0);
       process.exit(0);
@@ -455,6 +519,20 @@ access token. To persist it, store it in your shell or the .env shown above.
     const {
       flags: { editor: _editor = "auto" },
     } = cli;
+
+    if (register) {
+      await require("./registerProtocol").register(
+        await fetchEditor(_editor, false)
+      );
+      return;
+    }
+
+    let url = cli.input[0]?.trim() ?? "";
+    let alwaysConfirm = cli.flags.confirm;
+
+    if (url.includes("git-peek://")) {
+      url = url.replace("git-peek://", "").trim();
+    }
 
     let link;
 
@@ -486,7 +564,7 @@ access token. To persist it, store it in your shell or the .env shown above.
           url = await this.search(url);
           isMalformed = !url || !url.includes("/") || url.includes(" ");
         } catch (exception) {
-          console.log(exception);
+          this.log(exception);
         }
       }
     }
@@ -495,7 +573,9 @@ access token. To persist it, store it in your shell or the .env shown above.
 
     if (
       link.resource === "github.com" &&
-      (branch === "default" || defaultBranch)
+      (branch === "default" ||
+        defaultBranch ||
+        (branch === "" && cli.flags.fromscript))
     ) {
       ref = await resolveRefFromURL(link.owner, link.name);
     } else if (branch !== "") {
@@ -557,27 +637,7 @@ access token. To persist it, store it in your shell or the .env shown above.
       await this.clone(link.href, tmpobj.name);
     }
 
-    let chosenEditor =
-      !_editor || _editor === "auto" ? process.env.EDITOR : _editor;
-
-    if (!chosenEditor?.trim().length) {
-      for (let editor of editorsToTry) {
-        try {
-          chosenEditor = await which(editor);
-          if (chosenEditor.includes("code") || chosenEditor.includes("subl")) {
-            chosenEditor = `"` + chosenEditor + `"`;
-          }
-          break;
-        } catch (exception) {}
-      }
-    }
-
-    if (!chosenEditor || !chosenEditor?.trim()?.length) {
-      console.warn(
-        "No editor detected, defaulting to Visual Studio Code. Set an editor with the -e flag"
-      );
-      chosenEditor = "code";
-    }
+    let chosenEditor = await fetchEditor(_editor, false);
 
     let editorSpecificCommands = [];
 
@@ -657,21 +717,33 @@ access token. To persist it, store it in your shell or the .env shown above.
           tmpobj.name
         )}" ${editorSpecificCommands.join(" ")}`.trim();
 
-        this.slowTask = childProcess.exec(
-          cmd,
-          {
-            env: process.env,
-            stdio: "inherit",
-            cwd: tmpobj.name,
-          },
-          (err, res) => (err ? reject(err) : resolve(res))
-        );
+        this.slowTask = childProcess.spawn(cmd, {
+          env: process.env,
+          shell: true,
+          stdio: cli.flags.fromscript ? "ignore" : "inherit",
+          detached: true,
+          cwd: tmpobj.name,
+        });
+        let didResolve = false;
+
+        function resolver() {
+          if (!didResolve) {
+            process.stdin.setRawMode(false);
+            process.stdin.resume();
+
+            resolve();
+            didResolve = true;
+          }
+        }
+
+        this.slowTask.once("exit", resolver);
+        this.slowTask.once("error", reject);
       }
     });
 
     if (shouldKeep) {
       didRemove = true;
-    } else if (this.editorMode === EditorMode.unknown) {
+    } else if (this.editorMode === EditorMode.unknown || alwaysConfirm) {
       // TODO: remove this when https://github.com/vadimdemedes/ink/issues/415 is resolved.
       const _disableWarning = process.emitWarning;
       process.emitWarning = () => {};
@@ -683,11 +755,15 @@ access token. To persist it, store it in your shell or the .env shown above.
 
     doExit();
     process.exit();
+    setTimeout(() => {
+      process.emitWarning = () => {};
+      process.kill(process.pid, "SIGTERM");
+    }, 1000);
   }
 }
 
-process.on("unhandledRejection", (reason) => console.error(reason));
-process.on("unhandledException", (reason) => console.error(reason));
+process.on("unhandledRejection", exceptionLogger);
+process.on("unhandledException", exceptionLogger);
 
 if (DOTENV_EXISTS) {
   dotenv.config({ path: GIT_PEEK_ENV_PATH });

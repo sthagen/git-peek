@@ -17,8 +17,10 @@ npm install -g @jarred/git-peek
 
 But there are also [precompiled binaries](https://github.com/Jarred-Sumner/git-peek/releases):
 
-- [Windows x64 – 1.1.37](https://github.com/Jarred-Sumner/git-peek/releases/download/1.1.37/git-peek.exe)
-- [macOS x64 – 1.1.37](https://github.com/Jarred-Sumner/git-peek/releases/download/1.1.37/git-peek-macOS)
+- [Windows x64 – 1.2.2](https://github.com/Jarred-Sumner/git-peek/releases/download/1.2.2/git-peek.exe)
+- [macOS x64 – 1.2.2](https://github.com/Jarred-Sumner/git-peek/releases/download/1.2.2/git-peek-macOS)
+
+**NEW**: [Try the chrome/firefox extension](https://github.com/Jarred-Sumner/1-click-from-github-to-editor). It adds an "Open" button to pull requests, files, and repositories, so you can read code with your editor without needing to copy-paste into the terminal. Only works on macOS for now and doesn't work on vim (terminal editor without a temrinal? how)
 
 ## Usage:
 
@@ -114,6 +116,11 @@ If you paste a link to a file on GitHub, it will quickly open the file in your l
                           By default, it will search $EDITOR. If not found, it
                           will try code, then subl, then vim.
 
+    -r, --register        [default: false] Register the git-peek:// url protocol
+                          This allows the "Open" buttons to work on
+                          github.com once you\'ve installed the extension. Only
+                          supported on macOS (Windows coming soon).
+
     -o, --out=           [default: system temp directory] output directory to
                           store repository files in. If youre cloning a large
                           repo and your tempdir is an in-memory storage (/tmp),
@@ -168,6 +175,12 @@ When your editor closes or you close `git peek`, it deletes the repository from 
 This was inspired by [github1s.com](https://github.com/conwnet/github1s).
 
 ### Changelog
+
+- `1.2.2`: Prevent process from sticking around longer than necessary if its still extracting the repository when its supposed to close. Add `fs.rmSync` polyfill
+
+- `1.2.1`: Slightly improve reliability & performance of launching the editor (using child_process.spawn instead of using child_process.exec) and allow the AppleScript to launch multiple instances
+
+- `1.2.0`: Create a `git-peek://` URL handler, so that you can click a link to open a repository in your local editor. Register the URL handler with `git peek -r`.
 
 - `1.1.37`: Add easter egg to search results
 
