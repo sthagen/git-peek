@@ -9,18 +9,22 @@ Use it when you want to browse or search other people's code with your own edito
 
 ## Installation:
 
-Installing from npm makes updates easy:
+Homebrew:
+
+```
+brew install jarred-sumner/git-peek/git-peek
+```
+
+For Windows and Linux, install from npm directly:
 
 ```
 npm install -g @jarred/git-peek
 ```
 
-But there are also [precompiled binaries](https://github.com/Jarred-Sumner/git-peek/releases):
+1-click "Peek" button for GitHub:
 
-- [Windows x64 – 1.3.2](https://github.com/Jarred-Sumner/git-peek/releases/download/1.3.2/git-peek.exe)
-- [macOS x64 – 1.3.2](https://github.com/Jarred-Sumner/git-peek/releases/download/1.3.2/git-peek-macOS)
-
-**NEW**: [Try the chrome/firefox extension](https://github.com/Jarred-Sumner/1-click-from-github-to-editor). It adds an "Open" button to pull requests, files, and repositories, so you can read code with your editor without needing to copy-paste into the terminal. Note: vim and Linux are both not supported yet
+- [**Download peek for Chrome**](https://chrome.google.com/webstore/detail/peek-%E2%80%93-github-to-local-ed/lipffmbhaajmndiglgmmcfldgolfaooj)
+- [**Download peek for Firefox**](https://addons.mozilla.org/en-US/firefox/addon/git-peek-for-github/)
 
 ## Usage:
 
@@ -112,7 +116,7 @@ If you paste a link to a file on GitHub, it will quickly open the file in your l
 
   OPTIONS
     -e, --editor=editor  [default: auto] editor to open with, possible values:
-                          auto, code, subl, vim, vi, code-insiders.
+                          auto, code, subl, nvim, vim, vi, code-insiders.
                           By default, it will search $EDITOR. If not found, it
                           will try code, then subl, then vim.
 
@@ -173,6 +177,44 @@ If you pass it a git repository rather than a Github url, it does a [partial clo
 When your editor closes or you close `git peek`, it deletes the repository from your computer.
 
 ### Changelog
+
+##### `1.3.14 - 1.3.17`
+
+- Fix $EDITOR detection bug
+
+##### `1.3.14`
+
+- Auto-detect `nvim`
+- Add `/n?vim?/` support for Peek (browser extension) on macoS.
+
+##### `1.3.8 - 1.3.13`
+
+- Improve reliability of `git peek -r` on macOS
+- Support skipping JSDelivr requests when we know in advance its a private repository
+- Fix the homebrew build
+
+##### `1.3.7`
+
+- Fix AbortController polyfill in Node 14.
+
+##### `1.3.6`
+
+- Fix windows path bug
+
+##### `1.3.5`
+
+- Improve start performance by about 25% via code splitting
+
+##### `1.3.4`
+
+- Improve reliability of deleting files on Windows. On POSIX systems, you can delete files when they're in use. Windows will refuse, even if "in use" means, the process' current working directory is set to it but there aren't necessarily files open for it. The fix was to make it so that the current working directory on Windows is the parent directory, and also to tell `rimraf` to first delete all the files inside the folder and then delete the folder itself. This probably isnt' ideal for performance, maybe there's a more "native" system call for this.
+- Fix logs that were supposed to only show up with `VERBOSE` env var set
+- More reliably exit the process when opened from browser extension on Windows. Trying to prevent lots of extraneous `subl.exe` from showing up
+
+##### `1.3.3`
+
+- Add support for GitHub Enterprise! (Thanks @Thau)
+- Fix detecting when you closed Visual Studio Code after opening it from `git-peek://` (this already worked in the CLI). `git-peek` should now automatically delete the repository when using the browser extension (when your editor is Visual Studio Code)
 
 #### `1.3.0 - 1.3.2`
 
@@ -243,5 +285,17 @@ Removed using the `$GITHUB_TOKEN` from `~/.hubs/config`.
 - `1.1.11`: When available, use github access token for github API requests to enable private repositories to work. To enable this, either set a `GITHUB_TOKEN` environment variable or if you've installed [hub](https://github.com/github/hub), it will automatically use `oauth_token` from `$HOME/.config/hub`. In other words, if you use `hub`, this should just work by default.
 - `1.1.10`: Fix vim
 - `1.1.9`: Fix Windows
+
+### Known Bugs
+
+#### Sublime Text
+
+`subl --wait` does not support folders, so git-peek is unable to detect when Sublime Text closes. On the CLI, this isn't a problem – it just shows a "Delete Repository Y/n" confirm message, same as other editors.
+
+![image](https://user-images.githubusercontent.com/709451/107998350-d3431380-6f99-11eb-9088-cda304e73e06.png)
+
+On the browser extension, I'm not really sure yet what to do about this.
+
+Visual Studio Code doesn't have this problem because passing a directory to `--wait` correctly waits until the window is closed.
 
 Originally inspired by [github1s.com](https://github.com/conwnet/github1s).

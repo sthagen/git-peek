@@ -15,12 +15,23 @@ import type { Writable } from "stream";
 import zlib from "zlib";
 import rimraf from "rimraf";
 
-if (typeof global.AbortController === "undefined") {
-  global.AbortController = require("abort-controller").AbortController;
-  global.AbortSignal = require("abort-controller").AbortSignal;
-}
+const _SEARCH_PATH = path.join(__dirname, "Search");
+const _REGISTER_PROTOCOL_PATH = path.join(__dirname, "registerProtocol");
+const _CONFIRM_PROMPT_PATH = path.join(__dirname, "confirmPrompt");
+import { Terminal } from "which-term";
 
-const AbortController = global.AbortController;
+function resolveAfterDelay(delay) {
+  return new Promise((resolve, reject) => setTimeout(resolve, delay));
+}
+// global.fetch = require("node-fetch");
+
+// if (typeof global.AbortController === "undefined") {
+//   require("abortcontroller-polyfill/dist/polyfill-patch-fetch");
+// }
+
+// This is to trick esbuild into code splitting these files
+
+// const AbortController = global.AbortController;
 
 let exiting = false;
 
@@ -30,7 +41,8 @@ const HOME =
     : process.env.HOME;
 
 const GIT_PEEK_ENV_PATH = path.join(HOME, ".git-peek");
-let editorsToTry = ["code", "subl", "code-insiders", "vim", "vi"];
+
+let editorsToTry = ["code", "subl", "nvim", "code-insiders", "vim", "vi"];
 
 let shouldKeep = false;
 
@@ -53,6 +65,10 @@ if (!fs.rmSync) {
 }
 
 async function fetchEditor(_editor, silent) {
+  if (process.env.EDITOR && _editor === "auto") {
+    return process.env.EDITOR;
+  }
+
   let chosenEditor =
     !_editor || _editor === "auto" ? process.env.EDITOR : _editor;
 
@@ -98,7 +114,7 @@ const exitBehavior = {
 
 // This will break if the github repo is called pull or if the organization is called pull
 function isPullRequest(url: string) {
-  if (!url.includes("github.com") || !url.includes("/pull/")) {
+  if (!url.includes(GITHUB_BASE_DOMAIN) || !url.includes("/pull/")) {
     return false;
   }
 
@@ -106,10 +122,10 @@ function isPullRequest(url: string) {
 }
 
 async function resolveRefFromPullRequest(url: string) {
-  let _url = url.replace("https://github.com", "");
+  let _url = url.replace(`https://${GITHUB_BASE_DOMAIN}`, "");
   const [__, owner, repo, _, pullRequestID] = _url.split("/");
 
-  const apiURL = `https://api.github.com/repos/${owner}/${repo}/pulls/${pullRequestID}`;
+  const apiURL = `https://${GITHUB_API_DOMAIN}/repos/${owner}/${repo}/pulls/${pullRequestID}`;
 
   const result = await githubFetch(apiURL);
   if (!result.ok) {
@@ -129,7 +145,9 @@ async function resolveRefFromPullRequest(url: string) {
 }
 
 async function resolveRefFromURL(owner: string, repo: string) {
-  const apiURL = `https://api.github.com/repos/${owner}/${repo}`;
+  const apiURL = `https://${GITHUB_API_DOMAIN}/repos/${owner}/${repo}`;
+  if (process.env.VERBOSE)
+    console.log("Couldn't auto-detect ref, asking github what the ref is");
 
   const result = await githubFetch(apiURL);
   if (!result.ok) {
@@ -164,22 +182,12 @@ enum EditorMode {
   vim = 3,
 }
 
-let aborter = new AbortController();
-
-function githubFetch(url, _aborter: AbortController = null) {
+function githubFetch(url) {
   const token = findGitHubToken();
   if (token && !followRedirect.headers) {
     followRedirect.headers = { authorization: `Bearer ${token}` };
   }
-  return fetch(
-    url,
-    _aborter
-      ? {
-          ...followRedirect,
-          signal: _aborter.signal,
-        }
-      : followRedirect
-  );
+  return fetch(url, followRedirect);
 }
 
 function noop() {}
@@ -215,15 +223,27 @@ function doExit() {
     }
   }
 
-  if (!wasExiting) aborter.abort();
-
   if (!shouldKeep && instance?.destination?.length && retryCount < 10) {
-    rimraf.sync(instance.destination);
+    // Error: ENOTEMPTY: directory not empty, rmdir
+    if (process.platform === "win32") {
+      try {
+        rimraf.sync(instance.destination + "/*/**");
+        rimraf.sync(instance.destination);
+      } catch (exception) {
+        if (process.env.VERBOSE) console.error(exception);
+      }
+    } else {
+      try {
+        rimraf.sync(instance.destination);
+      } catch (exception) {
+        if (process.env.VERBOSE) console.error(exception);
+      }
+    }
 
     if (fs.existsSync(instance.destination)) {
-      process.nextTick(doExit);
-      // if (process.env.VERBOSE)
-      console.log(`Failed to delete, retry attempt #${retryCount}/10`);
+      setTimeout(doExit, 32);
+      if (process.env.VERBOSE)
+        console.log(`Failed to delete, retry attempt #${retryCount}/10`);
 
       retryCount++;
       return;
@@ -275,7 +295,7 @@ class Command {
 
     const resp = await fetch(url, {
       redirect: "follow",
-      signal: aborter.signal,
+      // signal: aborter.signal,
     });
 
     if (!resp.ok || resp.status === 404) {
@@ -316,14 +336,14 @@ class Command {
     // TODO: remove this when https://github.com/vadimdemedes/ink/issues/415 is resolved.
     const _disableWarning = process.emitWarning;
     process.emitWarning = () => {};
-    const { renderInk } = require("./Search");
+    const { renderInk } = require(SEARCH_PATH);
     process.emitWarning = _disableWarning;
 
     return renderInk(input);
   }
 
   async _unzip(source: string) {
-    const response = await githubFetch(source, aborter);
+    const response = await githubFetch(source);
     if (response.ok) {
       return response.body;
     } else if (response.status === 403 || response.status === 401) {
@@ -340,38 +360,42 @@ If this is a private repo, consider setting $GITHUB_TOKEN. To save $GITHUB_TOKEN
   didUseFallback = false;
   _tar: Writable;
   unzipPromise: Promise<any>;
+  archiveStartPromise: Promise<any>;
   unzip(owner, name, ref, fallback, to: string) {
     return new Promise((resolve2, reject2) => {
-      this.unzipPromise = new Promise(async (resolve, reject) => {
-        const archive = await this.getArchive(
-          `https://api.github.com/repos/${owner}/${name}/tarball/${ref}`,
-          `https://api.github.com/repos/${owner}/${name}/tarball/${fallback}`
-        );
+      this.archiveStartPromise = new Promise((resolve3, reject3) => {
+        this.unzipPromise = new Promise(async (resolve, reject) => {
+          const archive = await this.getArchive(
+            `https://${GITHUB_API_DOMAIN}/repos/${owner}/${name}/tarball/${ref}`,
+            `https://${GITHUB_API_DOMAIN}/repos/${owner}/${name}/tarball/${fallback}`
+          );
+          resolve3();
 
-        this.log("⏳ Extracting repository to temp folder...");
-        archive.pipe(
-          (this._tar = tar.x({
-            cwd: to,
-            strip: 1,
-            "keep-newer-files": true,
-            noMtime: true,
-            // onentry(entry) {},
-            // onwarn(message, data) {},
-          }))
-        );
+          this.log("⏳ Extracting repository to temp folder...");
+          archive.pipe(
+            (this._tar = tar.x({
+              cwd: to,
+              strip: 1,
+              "keep-newer-files": true,
+              noMtime: true,
+              // onentry(entry) {},
+              // onwarn(message, data) {},
+            }))
+          );
 
-        archive.on("end", () => {
-          if (exiting) return;
-          this.log("💿 Finished downloading repository!");
-          resolve();
-          resolve2();
-        });
-        archive.on("error", (error) => {
-          if (didRemove || exiting) return;
+          archive.on("end", () => {
+            if (exiting) return;
+            this.log("💿 Finished downloading repository!");
+            resolve();
+            resolve2();
+          });
+          archive.on("error", (error) => {
+            if (didRemove || exiting) return;
 
-          this.log("💿 Failed to download repository!");
-          reject(error);
-          reject2(error);
+            this.log("💿 Failed to download repository!");
+            reject(error);
+            reject2(error);
+          });
         });
       });
     });
@@ -417,7 +441,7 @@ OPTIONS
   }] editor to open with, possible values:
                         auto, ${editorsToTry.join(", ")}.
                         By default, it will search $EDITOR. If not found, it
-                        will try code, then subl, then vim.
+                        will try code, then subl, then nvim then vim.
 
   -d                    [default: false] Ask the GitHub API
                         for the default_branch to clone.
@@ -444,20 +468,23 @@ OPTIONS
 
   -h, --help           show CLI help
 
-ENVIRONMENT VARIABLES:
-  $EDITOR: ${process.env.EDITOR?.length ? process.env.EDITOR : "not set"}
-  $GITHUB_TOKEN: ${
-    process.env.GITHUB_TOKEN?.length
-      ? new Array(process.env.GITHUB_TOKEN.length).fill("*").join("")
-      : "not set"
-  }
-  .env: ${DOTENV_EXISTS ? "✅" : "❌"} ${GIT_PEEK_ENV_PATH}
+  -env, --environment  print location and current directory of environment
+                       variables
+
+${envHelp()}
 
 For use with private GitHub repositories, set $GITHUB_TOKEN to a personal
 access token. To persist it, store it in your shell or the .env shown above.
+
+For use with GitHub Enterprise, set $GITHUB_BASE_DOMAIN and $GITHUB_API_DOMAIN
+to the appropriate URLs.
 `.trim(),
       {
         flags: {
+          environment: {
+            type: "boolean",
+            alias: "env",
+          },
           fromscript: {
             type: "boolean",
             default: false,
@@ -568,6 +595,12 @@ access token. To persist it, store it in your shell or the .env shown above.
 
     shouldKeep = cli.flags.keep;
 
+    if (cli.flags.environment) {
+      console.log(envHelp());
+      process.exit(0);
+      return;
+    }
+
     if (
       cli.flags.fromscript &&
       process.env.SAY_DEBUG?.length &&
@@ -582,7 +615,7 @@ access token. To persist it, store it in your shell or the .env shown above.
     }
 
     if (version) {
-      cli.showVersion();
+      console.log(require("package.json").version);
       process.exit(0);
     }
 
@@ -591,7 +624,7 @@ access token. To persist it, store it in your shell or the .env shown above.
     } = cli;
 
     if (register) {
-      await require("./registerProtocol").register(
+      await require(REGISTER_PROTOCOL_PATH).register(
         await fetchEditor(_editor, false)
       );
       return;
@@ -601,7 +634,13 @@ access token. To persist it, store it in your shell or the .env shown above.
 
     if (url.includes("git-peek://")) {
       url = url.replace("git-peek://", "").trim();
+
+      if (url.includes("noCDN")) {
+        ALLOW_JSDELIVR = false;
+      }
     }
+
+    // url = url.replace("/blob/", "/tree/");
 
     let link;
 
@@ -610,7 +649,7 @@ access token. To persist it, store it in your shell or the .env shown above.
       const [owner, repo] = url.split("/");
 
       if (repo.trim().length) {
-        url = `https://github.com/${owner}/${repo}`;
+        url = `https://${GITHUB_BASE_DOMAIN}/${owner}/${repo}`;
       } else {
         isMalformed = true;
       }
@@ -641,10 +680,10 @@ access token. To persist it, store it in your shell or the .env shown above.
     let ref = link.ref;
 
     if (
-      link.resource === "github.com" &&
+      link.resource === GITHUB_BASE_DOMAIN &&
       (branch === "default" ||
         defaultBranch ||
-        (branch === "" && cli.flags.fromscript))
+        (link.ref === "" && cli.flags.fromscript))
     ) {
       ref = await resolveRefFromURL(link.owner, link.name);
     } else if (branch !== "") {
@@ -654,11 +693,15 @@ access token. To persist it, store it in your shell or the .env shown above.
     }
 
     if (url && url.length && isPullRequest(url)) {
+      if (process.env.VERBOSE) this.log("Resolving ref from pull request...");
       const [newOwner, newName, newRef] = await resolveRefFromPullRequest(url);
       link.name = newName;
       link.owner = newOwner;
       ref = newRef;
     }
+
+    if (process.env.VERBOSE)
+      this.log(`Fetching ${link.owner}/${link.name}#${ref}...`);
 
     const start = new Date().getTime();
 
@@ -681,6 +724,7 @@ access token. To persist it, store it in your shell or the .env shown above.
           }
     );
     this.destination = tmpobj.name;
+    let chosenEditorPromise = fetchEditor(_editor, false);
 
     didRemove = false;
     process.once("beforeExit", doExit);
@@ -697,31 +741,46 @@ access token. To persist it, store it in your shell or the .env shown above.
     let openPath = path.join(tmpobj.name, specificFile);
 
     // From a simple benchmark, unzip is 2x faster than git clone.
-    if (link.resource === "github.com") {
+    if (link.resource === GITHUB_BASE_DOMAIN) {
       let fallback = ref === "main" ? "master" : "main";
 
-      await Promise.any([
-        this.prefetchGithub(
+      let prefetchPromise;
+      if (ALLOW_JSDELIVR) {
+        prefetchPromise = this.prefetchGithub(
           link.name,
           link.owner,
           specificFile,
           ref,
           fallback,
           openPath
-        ),
-        this.unzip(link.owner, link.name, ref, fallback, tmpobj.name),
-      ]);
+        );
+      }
+      let unzipPromise = this.unzip(
+        link.owner,
+        link.name,
+        ref,
+        fallback,
+        tmpobj.name
+      );
+
+      if (prefetchPromise) {
+        await Promise.any([prefetchPromise, unzipPromise]);
+      } else {
+        let archiveStartPromise = this.archiveStartPromise.then(() =>
+          resolveAfterDelay(100)
+        );
+        await Promise.any([unzipPromise, archiveStartPromise]);
+      }
     } else {
       await this.clone(link.href, tmpobj.name);
     }
-
-    let chosenEditor = await fetchEditor(_editor, false);
 
     let editorSpecificCommands = [];
 
     // console.log(path.join(tmpobj.name, specificFile));
 
     this.editorMode = EditorMode.unknown;
+    let chosenEditor = await chosenEditorPromise;
 
     // VSCode is the happy case.
     // When passed a folder, "--wait" correctly waits until the Window is closed.
@@ -774,7 +833,9 @@ access token. To persist it, store it in your shell or the .env shown above.
     }
 
     if (
-      ((this.editorMode === EditorMode.vim && usingDefaultFile) ||
+      ((this.editorMode === EditorMode.vim &&
+        usingDefaultFile &&
+        !cli.flags.fromscript) ||
         cli.flags.wait) &&
       this.unzipPromise
     ) {
@@ -783,7 +844,7 @@ access token. To persist it, store it in your shell or the .env shown above.
     }
 
     await new Promise((resolve, reject) => {
-      if (this.editorMode === EditorMode.vim) {
+      if (this.editorMode === EditorMode.vim && !cli.flags.fromscript) {
         process.stdin.setRawMode(true);
         process.stdin.pause();
 
@@ -803,12 +864,100 @@ access token. To persist it, store it in your shell or the .env shown above.
         let didResolve = false;
         function resolver() {
           if (!didResolve) {
-            process.stdin.setRawMode(false);
-            process.stdin.resume();
+            if (process?.stdin?.setRawMode) process.stdin.setRawMode(false);
+            if (process?.stdin?.resume) process.stdin.resume();
 
             resolve();
             didResolve = true;
           }
+        }
+
+        this.slowTask.once("close", resolver);
+        this.slowTask.once("exit", resolver);
+        this.slowTask.once("error", resolver);
+      } else if (
+        this.editorMode === EditorMode.vim &&
+        process.platform === "darwin"
+      ) {
+        let outerCommand: string;
+        let innerCommand =
+          chosenEditor +
+          " " +
+          // TODO: is this bad?
+          (usingDefaultFile ? specificFile : specificFile) +
+          " " +
+          editorSpecificCommands.join(" ");
+
+        let fileToWatch =
+          CHOSEN_TERMINAL === Terminal.alacritty
+            ? null
+            : tmp.fileSync({ discardDescriptor: true, detachDescriptor: true });
+
+        switch (CHOSEN_TERMINAL) {
+          case Terminal.iTerm: {
+            outerCommand = `echo '#!/bin/bash\n${innerCommand}; echo $PPID $PID > ${fileToWatch.name}; sleep 1; exit;' > /tmp/git-peek.sh; chmod a+x /tmp/git-peek.sh; open -F -W -a iTerm /tmp/git-peek.sh`;
+            break;
+          }
+
+          case Terminal.alacritty: {
+            outerCommand = `echo '#!/bin/bash\ncd ${
+              tmpobj.name
+            };\n${innerCommand};' > /tmp/git-peek.sh; chmod a+x /tmp/git-peek.sh; ${
+              process.env.ALACRITTY_PATH ||
+              "/Applications/Alacritty.app/Contents/MacOS/alacritty"
+            } -e /tmp/git-peek.sh`;
+            break;
+          }
+
+          // Hyper doesn't support this!
+          // case Terminal.Hyper: {
+          //   outerCommand = `open -a "${which.sync(
+          //     "hyper"
+          //   )}" . -W -n --args ${innerCommand}`;
+          //   break;
+          // }
+
+          default: {
+            outerCommand = `echo '#!/bin/bash\n${innerCommand}; echo $PPID $PID > ${fileToWatch.name}; sleep 1; exit' > /tmp/git-peek.sh; chmod a+x /tmp/git-peek.sh; open -n -W -F -a Terminal /tmp/git-peek.sh`;
+            break;
+          }
+        }
+
+        this.slowTask = childProcess.spawn(outerCommand, {
+          env: process.env,
+          shell: true,
+          windowsHide: true,
+          stdio: "ignore",
+          // This line is important! If detached is true, nothing ever happens.
+          detached: false,
+          // Windows will refuse to delete if there is an active process in the folder
+        });
+
+        if (process.env.VERBOSE) console.log("RUN", outerCommand);
+
+        let watcher;
+        let pid = this.slowTask.pid;
+        let didResolve = false;
+        const resolver = () => {
+          if (!didResolve) {
+            if (watcher) {
+              fs.unwatchFile(fileToWatch.name);
+              watcher = null;
+            }
+
+            if (!this.slowTask.killed && this.slowTask.connected)
+              this.slowTask.kill("SIGTERM");
+
+            if (process?.stdin?.setRawMode) process.stdin.setRawMode(false);
+            if (process?.stdin?.resume) process.stdin.resume();
+
+            resolve();
+            didResolve = true;
+          }
+        };
+
+        if (fileToWatch) {
+          watcher = fs.watchFile(fileToWatch.name, {}, resolver);
         }
 
         this.slowTask.once("close", resolver);
@@ -828,6 +977,10 @@ access token. To persist it, store it in your shell or the .env shown above.
 
         let didResolve = false;
 
+        const cwd =
+          process.platform === "win32"
+            ? path.join(tmpobj.name, "../")
+            : tmpobj.anme;
         if (cli.flags.fromscript && process.platform === "win32") {
           this.slowTask = childProcess.spawn(cmd, {
             env: process.env,
@@ -836,16 +989,30 @@ access token. To persist it, store it in your shell or the .env shown above.
             stdio: "ignore",
             // This line is important! If detached is true, nothing ever happens.
             detached: false,
-            cwd: tmpobj.name,
+            // Windows will refuse to delete if there is an active process in the folder
+            cwd,
+          });
+        } else if (cli.flags.fromscript && process.platform === "darwin") {
+          this.slowTask = childProcess.spawn(cmd, {
+            env: process.env,
+            shell: true,
+            windowsHide: true,
+            stdio: "pipe",
+            // This line is important! If detached is true, nothing ever happens.
+            detached: true,
+            cwd,
           });
         } else {
           this.slowTask = childProcess.spawn(cmd, {
             env: process.env,
             shell: true,
             windowsHide: true,
-            stdio: cli.flags.fromscript ? "ignore" : "inherit",
+            stdio:
+              exitBehavior.waitFor !== WaitFor.childProcessExit
+                ? "ignore"
+                : "inherit",
             detached: exitBehavior.waitFor === WaitFor.childProcessExit,
-            cwd: tmpobj.name,
+            cwd,
           });
         }
 
@@ -868,8 +1035,8 @@ access token. To persist it, store it in your shell or the .env shown above.
         } else {
           function resolver() {
             if (!didResolve) {
-              process.stdin.setRawMode(false);
-              process.stdin.resume();
+              if (process?.stdin?.setRawMode) process.stdin.setRawMode(false);
+              if (process?.stdin?.resume) process.stdin.resume();
 
               resolve();
             }
@@ -891,7 +1058,7 @@ access token. To persist it, store it in your shell or the .env shown above.
       // TODO: remove this when https://github.com/vadimdemedes/ink/issues/415 is resolved.
       const _disableWarning = process.emitWarning;
       process.emitWarning = () => {};
-      const { renderConfirm } = require("src/confirmPrompt");
+      const { renderConfirm } = require(CONFIRM_PROMPT_PATH);
       process.emitWarning = _disableWarning;
       const shouldRemove = await renderConfirm();
       shouldKeep = didRemove = !shouldRemove;
@@ -907,12 +1074,62 @@ access token. To persist it, store it in your shell or the .env shown above.
   }
 }
 
+function envHelp() {
+  return `
+ENVIRONMENT VARIABLES:
+
+  .env file: ${DOTENV_EXISTS ? "✅" : "❌"} ${GIT_PEEK_ENV_PATH}
+
+  $EDITOR: ${process.env.EDITOR?.length ? process.env.EDITOR : "not set"}
+
+  $GITHUB_TOKEN: ${
+    process.env.GITHUB_TOKEN?.length
+      ? new Array(process.env.GITHUB_TOKEN.length).fill("*").join("")
+      : "not set"
+  }
+
+  $GITHUB_BASE_DOMAIN: ${
+    process.env.GITHUB_BASE_DOMAIN?.length
+      ? process.env.GITHUB_BASE_DOMAIN
+      : "github.com"
+  }
+
+  $GITHUB_API_DOMAIN: ${
+    process.env.GITHUB_API_DOMAIN?.length
+      ? process.env.GITHUB_API_DOMAIN
+      : "api.github.com"
+  }
+
+  $OPEN_IN_TERMINAL: ${
+    process.env.OPEN_IN_TERMINAL?.length
+      ? process.env.OPEN_IN_TERMINAL
+      : "not set"
+  }
+
+  $ALACRITTY_PATH: ${
+    process.env.ALACRITTY_PATH?.length ? process.env.ALACRITTY_PATH : "not set"
+  }
+
+  `;
+}
+
 process.on("unhandledRejection", exceptionLogger);
 process.on("unhandledException", exceptionLogger);
 
 if (DOTENV_EXISTS) {
-  dotenv.config({ path: GIT_PEEK_ENV_PATH });
+  const result = dotenv.config({ path: GIT_PEEK_ENV_PATH });
+  if (result?.parsed["EDITOR"]) {
+    process.env.EDITOR = result.parsed["EDITOR"];
+  }
+
+  if (process.env.VERBOSE_UNSAFE) {
+    console.log("Loaded .env:\n", result.parsed);
+  }
 }
 
+const CHOSEN_TERMINAL: Terminal = require("./terminal").default;
+const GITHUB_BASE_DOMAIN = process.env.GITHUB_BASE_DOMAIN || "github.com";
+const GITHUB_API_DOMAIN = process.env.GITHUB_API_DOMAIN || "api.github.com";
+let ALLOW_JSDELIVR = GITHUB_API_DOMAIN === "api.github.com";
 instance = new Command();
 instance.run();

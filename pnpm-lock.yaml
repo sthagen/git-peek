@@ -7,7 +7,6 @@ devDependencies:
   '@types/tar': 4.0.4
   '@types/tmp': 0.2.0
   '@vercel/fetch': 6.1.0_node-fetch@2.6.1
-  abort-controller: 3.0.0
   chalk: 4.1.0
   dotenv: 8.2.0
   dotenv-cli: 4.0.0
@@ -22,8 +21,8 @@ devDependencies:
   node-fetch: 2.6.1
   normalize-git-url: 3.0.2
   open-editor: 3.0.0
-  ora: 5.3.0
   pkg: 4.4.9
+  pnpm: 5.17.2
   promise-any-polyfill: 0.1.2
   qs: 6.9.6
   react: 17.0.1
@@ -36,6 +35,7 @@ devDependencies:
   tmp: 0.2.1
   typescript: 4.2.0-beta
   which: 2.0.2
+  which-term: 1.0.2
 lockfileVersion: 5.2
 packages:
   /@babel/code-frame/7.12.13:
@@ -394,14 +394,6 @@ packages:
     dev: true
     resolution:
       integrity: sha512-KD2zyRZEBNs9PJ3/ob7zx0CvR4wM0oV4G5s5gFfPwmM74GpFbUN2pAAivP2AXnUrJ14Nkh8NumNKOzOyc4LbFQ==
-  /abort-controller/3.0.0:
-    dependencies:
-      event-target-shim: 5.0.1
-    dev: true
-    engines:
-      node: '>=6.5'
-    resolution:
-      integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==
   /agentkeepalive/3.4.1:
     dependencies:
       humanize-ms: 1.2.1
@@ -1109,12 +1101,6 @@ packages:
       node: '>=0.10.0'
     resolution:
       integrity: sha512-kVscqXk4OCp68SZ0dkgEKVi6/8ij300KBWTJq32P/dYeWTSwK41WyTxalN1eRmA5Z9UU/LX9D7FWSmV9SAYx6g==
-  /event-target-shim/5.0.1:
-    dev: true
-    engines:
-      node: '>=6'
-    resolution:
-      integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==
   /execa/4.1.0:
     dependencies:
       cross-spawn: 7.0.3
@@ -2533,6 +2519,13 @@ packages:
       node: '>=6'
     resolution:
       integrity: sha512-GpgvHHocGRyQm74b6FWEZZVRroHKE1I0/BTjAmySaohK+cUn+hZpbqXkc3KWgW3gQYkqcQej35FohcT0FRlkRQ==
+  /pnpm/5.17.2:
+    dev: true
+    engines:
+      node: '>=10.16'
+    hasBin: true
+    resolution:
+      integrity: sha512-X0WEumozKhlYZObL1E+Nmi67f+ZMS+fbpE6vAymlazT2lx0B+Agw9iJsdd//tjAqIzxcsxxgZScx0EIPc42Ulw==
   /prelude-ls/1.1.2:
     dev: true
     engines:
@@ -3476,6 +3469,10 @@ packages:
     dev: true
     resolution:
       integrity: sha1-8LDc+RW8X/FSivrbLA4XtTLaL+g=
+  /which-term/1.0.2:
+    dev: true
+    resolution:
+      integrity: sha512-CHLOzvYiWvvKzx85Su/ZNHDHbTzGqv71RJWX/+z6Aeeu0K8BVdGIcefi7BFPeUiRwffnH2JV3kxdn5i31i+6qw==
   /which/2.0.2:
     dependencies:
       isexe: 2.0.0
@@ -3605,7 +3602,6 @@ specifiers:
   '@types/tar': ^4.0.4
   '@types/tmp': ^0.2.0
   '@vercel/fetch': ^6.1.0
-  abort-controller: ^3.0.0
   chalk: ^4.1.0
   dotenv: ^8.2.0
   dotenv-cli: ^4.0.0
@@ -3620,8 +3616,8 @@ specifiers:
   node-fetch: ^2.6.1
   normalize-git-url: ^3.0.2
   open-editor: ^3.0.0
-  ora: ^5.3.0
   pkg: ^4.4.9
+  pnpm: ^5.17.2
   promise-any-polyfill: ^0.1.2
   qs: ^6.9.6
   react: ^17.0.1
@@ -3634,3 +3630,4 @@ specifiers:
   tmp: ^0.2.1
   typescript: beta
   which: ^2.0.2
+  which-term: ^1.0.2
